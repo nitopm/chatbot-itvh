@@ -18,23 +18,48 @@ REGLAS ESTRICTAS:
 8. SUGERENCIAS DE SEGUIMIENTO: Siempre, al final de tu respuesta, debes escribir 2 o 3 preguntas relacionadas que el estudiante podría querer hacer a continuación. Usa EXACTAMENTE este formato: 
    [SUGERENCIA_1: ¿Pregunta relacionada 1?] 
    [SUGERENCIA_2: ¿Pregunta relacionada 2?]
+9. Si el estudiante pregunta por eventos, pláticas, conferencias, talleres o actividades culturales/académicas del tecnológico, utiliza la CARTELERA DE EVENTOS Y CONFERENCIAS PRÓXIMAS. Proporciona fecha, hora, lugar, ponente y carrera a la que va dirigida de forma clara y entusiasta.
+10. Si el estudiante solicita el archivo oficial, PDF descargable o formato para imprimir (Servicio Social, Residencias, etc.), infórmale amablemente que puede consultarlo y descargarlo directamente en el botón de Google Drive oficial que aparece al pie de tu respuesta (gestionado por balumitvh@gmail.com).
 `;
 
-const chatModel = genAI.getGenerativeModel(
-  {
-    model: "gemini-2.0-flash",
-    systemInstruction: SYSTEM_PROMPT,
-    generationConfig: {
-      temperature: 0.2,
-      maxOutputTokens: 2048,
-    },
-  },
-  { apiVersion: "v1" }
-);
+// Función para generar contenido con Gemini 3.5 Flash Lite y fallback
+async function generarRespuestaConFallback(prompt: string) {
+  const modelosCandidatos = ["gemini-3.5-flash-lite", "gemini-3.5-flash"];
+
+  let ultimoError: any = null;
+
+  for (const nombreModelo of modelosCandidatos) {
+    for (let intento = 1; intento <= 2; intento++) {
+      try {
+        const model = genAI.getGenerativeModel(
+          {
+            model: nombreModelo,
+            systemInstruction: SYSTEM_PROMPT,
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 2048,
+            },
+          },
+          { apiVersion: "v1beta" }
+        );
+
+        const stream = await model.generateContentStream(prompt);
+        return stream;
+      } catch (err: any) {
+        ultimoError = err;
+        console.warn(`Intento ${intento} con ${nombreModelo} fallo:`, err.message || err);
+        // Esperar brevemente antes de reintentar si el servidor de Google está saturado (503)
+        await new Promise((r) => setTimeout(r, 800));
+      }
+    }
+  }
+
+  throw ultimoError || new Error("Los servidores de Gemini están experimentando alta demanda momentánea. Por favor intenta en unos segundos.");
+}
 
 // --- RATE LIMITING EN MEMORIA ---
 const rateLimitMap = new Map<string, { count: number; lastReset: number }>();
-const MAX_REQUESTS = 15;
+const MAX_REQUESTS = 10;
 const WINDOW_MS = 60 * 1000;
 
 function checkRateLimit(ip: string): boolean {
@@ -64,7 +89,7 @@ export async function POST(req: NextRequest) {
     const ip = req.headers.get("x-forwarded-for") || "IP_DESCONOCIDA";
     if (!checkRateLimit(ip)) {
       return NextResponse.json(
-        { error: "¡Vas muy rápido! Por favor, espera un minuto antes de hacer otra pregunta." },
+        { error: "Has alcanzado el límite de seguridad de 10 mensajes por minuto. Por favor, espera unos segundos antes de enviar otra consulta." },
         { status: 429 }
       );
     }
@@ -97,23 +122,57 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 2. Historial compacto
+    // 2. Consultar eventos y conferencias vigentes en Supabase
+    let contextoEventos = "";
+    try {
+      const hoyISO = new Date().toISOString().split("T")[0];
+      const { data: eventosActivos } = await supabase
+        .from("eventos_itvh")
+        .select("titulo, tipo, carrera_destino, fecha_evento, hora_evento, lugar, ponente, descripcion, enlace_registro")
+        .eq("activo", true)
+        .gte("fecha_evento", hoyISO)
+        .order("fecha_evento", { ascending: true })
+        .limit(6);
+
+      if (eventosActivos && eventosActivos.length > 0) {
+        contextoEventos = eventosActivos
+          .map(
+            (ev) =>
+              `- [${ev.tipo?.toUpperCase() || "EVENTO"}] "${ev.titulo}": Fecha: ${ev.fecha_evento?.split("T")[0]} ${ev.hora_evento ? `a las ${ev.hora_evento}` : ""}. Lugar: ${ev.lugar || "Campus ITVH"}. Ponente: ${ev.ponente || "Por confirmar"}. Dirigido a: ${ev.carrera_destino || "General"}. Descripción: ${ev.descripcion || ""}. ${ev.enlace_registro ? `Registro: ${ev.enlace_registro}` : ""}`
+          )
+          .join("\n");
+      }
+    } catch (e) {
+      // Ignorar si la tabla aún no existe para no romper el chat
+    }
+
+    // 3. Historial compacto
     const historialCompacto = messages
       .slice(-3, -1)
       .map((m: { role: string; content: string }) => `${m.role === "user" ? "Estudiante" : "Balum"}: ${m.content}`)
       .join("\n");
 
-    const promptFinal = `INFORMACIÓN OFICIAL DEL ITVH:
+    const fechaHoyFormato = new Date().toLocaleDateString("es-MX", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+
+    const promptFinal = `FECHA ACTUAL: ${fechaHoyFormato}
+
+INFORMACIÓN OFICIAL DEL ITVH:
 ---
 ${contextoEncontrado}
 ---
+${contextoEventos ? `CARTELERA DE EVENTOS Y CONFERENCIAS PRÓXIMAS EN EL ITVH:\n---\n${contextoEventos}\n---\n` : ""}
 ${historialCompacto ? `HISTORIAL RECIENTE:\n${historialCompacto}\n` : ""}
 PREGUNTA DEL ESTUDIANTE: ${preguntaTexto}
 
 RESPUESTA DE BALUM:`;
 
-    // 3. Streaming con Gemini
-    const result = await chatModel.generateContentStream(promptFinal);
+    // 4. Streaming con Gemini resiliente (con auto-reintento y fallback)
+    const result = await generarRespuestaConFallback(promptFinal);
     const mensajeId = "msg_" + Date.now() + "_" + Math.random().toString(36).substring(2, 7);
 
     let textoCompletoAcumulado = "";

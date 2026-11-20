@@ -17,19 +17,22 @@ export default function AdminLoginPage() {
     setLoading(true);
     setError("");
 
-    // Clave de acceso institucional predeterminada (o definida en variable de entorno)
-    // Permite "admin123", "itvh2026", "balumAdmin"
-    const validKeys = ["itvh2026", "admin123", "balumAdmin"];
+    // Clave de acceso institucional predeterminada
+    const validKeys = ["baluntec2026", "itvh2026"];
 
     setTimeout(() => {
       if (validKeys.includes(password.trim())) {
-        sessionStorage.setItem("balum_admin_auth", "true");
-        router.push("/admin");
+        try {
+          sessionStorage.setItem("balum_admin_auth", "true");
+          localStorage.setItem("balum_admin_auth", "true");
+          document.cookie = "balum_admin_auth=true; path=/; max-age=86400; SameSite=Lax";
+        } catch (e) {}
+        window.location.href = "/admin";
       } else {
         setError("Contraseña de administrador incorrecta");
         setLoading(false);
       }
-    }, 600);
+    }, 200);
   };
 
   return (
@@ -90,9 +93,6 @@ export default function AdminLoginPage() {
               />
               <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">
-              Clave por defecto de prueba: <span className="font-mono text-slate-600 font-bold">itvh2026</span>
-            </p>
           </div>
 
           <button

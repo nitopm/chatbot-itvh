@@ -10,7 +10,7 @@ function chunkText(text: string, chunkSize: number = 1000, overlap: number = 200
   let start = 0;
   while (start < text.length) {
     const end = start + chunkSize;
-    chunks.append ? null : chunks.push(text.slice(start, end));
+    chunks.push(text.slice(start, end));
     start += chunkSize - overlap;
   }
   return chunks;
@@ -34,8 +34,11 @@ export async function POST(req: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // Usar Gemini 1.5 Pro / Flash para extraer el contenido en Markdown estructurado
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    // Usar Gemini 3.5 Flash Lite para extraer el contenido en Markdown estructurado
+    const model = genAI.getGenerativeModel(
+      { model: "gemini-3.5-flash-lite" },
+      { apiVersion: "v1beta" }
+    );
     const prompt = `Eres un extractor de documentos oficial del Instituto Tecnológico de Villahermosa (ITVH).
 Lee y extrae todo el contenido de este documento PDF de forma exhaustiva, preservando fechas, requisitos, pasos, tablas y listas en formato Markdown limpio y claro.`;
 
